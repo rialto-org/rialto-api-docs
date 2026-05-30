@@ -112,7 +112,7 @@ Example:
 ```bash
 API_KEY='<api_key>'
 
-curl -sS 'https://rialto-trade-api.nirmaan.ai/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0x0000000000000000000000000000000000000000&slippage_bps=50' \
+curl -sS 'https://rialto-trade-api.nirmaan.ai/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -140,7 +140,7 @@ Example response shape:
   "buy_token": "0xaf88d065e77cc2239327c5edb3a432268e5831",
   "sell_amount": "10000000000000000",
   "buy_amount": "30000000",
-  "taker": "0x0000000000000000000000000000000000000000",
+  "taker": "0xE968092b14829E5665a22531460Ad34012610F1f",
   "slippage_bps": 50,
   "route": {
     "sell_amount": "10000000000000000",
@@ -148,7 +148,7 @@ Example response shape:
     "gas_estimate": 150000,
     "legs": [
       {
-        "pool_id": "uniswap-v3:chain-42161:0x0000000000000000000000000000000000000000:500",
+        "pool_id": "uniswap-v3:chain-42161:0xE968092b14829E5665a22531460Ad34012610F1f:500",
         "sell_token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
         "buy_token": "0xaf88d065e77cc2239327c5edb3a432268e5831",
         "sell_amount": "10000000000000000",
@@ -198,7 +198,7 @@ Working example:
 ```bash
 API_KEY='<api_key>'
 
-curl -sS 'https://rialto-trade-api.nirmaan.ai/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0x0000000000000000000000000000000000000000&slippage_bps=50' \
+curl -sS 'https://rialto-trade-api.nirmaan.ai/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
   -H "Authorization: Bearer $API_KEY" \
   -o quote.json
 
@@ -242,10 +242,10 @@ Example response shape:
     "sell_amount": "10000000000000000",
     "buy_amount": "30000000",
     "min_buy_amount": "29850000",
-    "taker": "0x0000000000000000000000000000000000000000"
+    "taker": "0xE968092b14829E5665a22531460Ad34012610F1f"
   },
   "tx": {
-    "to": "0x0000000000000000000000000000000000000000",
+    "to": "0xE968092b14829E5665a22531460Ad34012610F1f",
     "data": "0x...",
     "value": "0",
     "estimated_gas": 270000,
