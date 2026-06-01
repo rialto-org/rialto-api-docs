@@ -6,7 +6,7 @@ supported tokens, request swap quotes, and build executable swap transactions.
 ## Base URL
 
 ```text
-https://rialto-trade-api.nirmaan.ai
+https://rialto-trade-api.rialto.xyz
 ```
 
 ## API Key Access
@@ -49,7 +49,7 @@ Returns tokens supported by the quote and swap APIs.
 Example:
 
 ```bash
-curl -sS 'https://rialto-trade-api.nirmaan.ai/tokens'
+curl -sS 'https://rialto-trade-api.rialto.xyz/tokens'
 ```
 
 Example response shape:
@@ -58,6 +58,14 @@ Example response shape:
 {
   "chain_id": 42161,
   "tokens": [
+    {
+      "name": "ETH",
+      "symbol": "ETH",
+      "address": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "decimals": 18,
+      "source": "constant",
+      "type": "non_stable"
+    },
     {
       "name": "Wrapped Ether",
       "symbol": "WETH",
@@ -97,7 +105,7 @@ Required query params:
 | `sell_token` | Token symbol or token address. |
 | `buy_token` | Token symbol or token address. |
 | `sell_amount` | Human decimal sell amount, for example `0.01`. |
-| `taker` | Wallet address that will receive output. |
+| `taker` | Non-zero wallet address that will receive output. |
 | `slippage_bps` | Max slippage in basis points. Example: `50` means 0.50%. |
 
 Optional query params:
@@ -112,7 +120,7 @@ Example:
 ```bash
 API_KEY='<api_key>'
 
-curl -sS 'https://rialto-trade-api.nirmaan.ai/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
+curl -sS 'https://rialto-trade-api.rialto.xyz/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
   -H "Authorization: Bearer $API_KEY"
 ```
 
@@ -137,22 +145,52 @@ Example response shape:
 {
   "chain_id": 42161,
   "sell_token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-  "buy_token": "0xaf88d065e77cc2239327c5edb3a432268e5831",
+  "buy_token": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
   "sell_amount": "10000000000000000",
-  "buy_amount": "30000000",
-  "taker": "0xE968092b14829E5665a22531460Ad34012610F1f",
+  "buy_amount": "19800022",
+  "platform_fee": {
+    "total_bps": 5,
+    "fees": [
+      {
+        "side": "source",
+        "token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+        "symbol": "WETH",
+        "decimals": 18,
+        "bps": "5",
+        "bps_x100": 500,
+        "amount": "5000000000000",
+        "amount_decimal": "0.000005",
+        "recipient": "0xa86b9655644e2b76be863664eea7ac5db3f8fc89"
+      }
+    ]
+  },
+  "network_fee": {
+    "token": "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "symbol": "ETH",
+    "decimals": 18,
+    "gas": "226046",
+    "gas_price": "20000000",
+    "gas_price_gwei": "0.02",
+    "amount": "4520920000000",
+    "amount_gwei": "4520.92",
+    "amount_eth": "0.00000452092"
+  },
+  "taker": "0xe968092b14829e5665a22531460ad34012610f1f",
   "slippage_bps": 50,
+  "candidate_paths": 8,
+  "successful_routes": 7,
+  "failed_routes": 1,
   "route": {
     "sell_amount": "10000000000000000",
-    "buy_amount": "30000000",
-    "gas_estimate": 150000,
+    "buy_amount": "19800022",
+    "gas_estimate": 106046,
     "legs": [
       {
-        "pool_id": "uniswap-v3:chain-42161:0xE968092b14829E5665a22531460Ad34012610F1f:500",
+        "pool_id": "uniswap-v3:chain-42161:0x6f38e884725a116c9c7fbf208e79fe8828a2595f:100",
         "sell_token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-        "buy_token": "0xaf88d065e77cc2239327c5edb3a432268e5831",
+        "buy_token": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
         "sell_amount": "10000000000000000",
-        "buy_amount": "30000000"
+        "buy_amount": "19809926"
       }
     ]
   }
@@ -169,6 +207,9 @@ Auth: requires API key with swap access.
 
 Builds executable transaction calldata from a prior quote. Send the full
 `/quote` response in the request body.
+
+The quote's `taker` must be a non-zero wallet address. A zero-address taker is
+rejected by `/swap`.
 
 Request body:
 
@@ -198,7 +239,7 @@ Working example:
 ```bash
 API_KEY='<api_key>'
 
-curl -sS 'https://rialto-trade-api.nirmaan.ai/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
+curl -sS 'https://rialto-trade-api.rialto.xyz/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
   -H "Authorization: Bearer $API_KEY" \
   -o quote.json
 
@@ -208,7 +249,7 @@ jq -n --slurpfile quote quote.json '{
   settlement: "permit2"
 }' > swap-request.json
 
-curl -sS -X POST 'https://rialto-trade-api.nirmaan.ai/swap' \
+curl -sS -X POST 'https://rialto-trade-api.rialto.xyz/swap' \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   --data @swap-request.json
@@ -238,26 +279,73 @@ Example response shape:
   "quote": {
     "chain_id": 42161,
     "sell_token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-    "buy_token": "0xaf88d065e77cc2239327c5edb3a432268e5831",
+    "buy_token": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
     "sell_amount": "10000000000000000",
-    "buy_amount": "30000000",
-    "min_buy_amount": "29850000",
-    "taker": "0xE968092b14829E5665a22531460Ad34012610F1f"
+    "buy_amount": "19800022",
+    "min_buy_amount": "19701021",
+    "taker": "0xe968092b14829e5665a22531460ad34012610f1f",
+    "slippage_bps": 50,
+    "candidate_paths": 8,
+    "successful_routes": 7,
+    "failed_routes": 1,
+    "route": {
+      "sell_amount": "10000000000000000",
+      "buy_amount": "19800022",
+      "gas_estimate": 106046,
+      "legs": [
+        {
+          "pool_id": "uniswap-v3:chain-42161:0x6f38e884725a116c9c7fbf208e79fe8828a2595f:100",
+          "sell_token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+          "buy_token": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+          "sell_amount": "10000000000000000",
+          "buy_amount": "19809926"
+        }
+      ]
+    }
   },
   "tx": {
-    "to": "0xE968092b14829E5665a22531460Ad34012610F1f",
+    "to": "0xbb6c13e7e1649736dc36cf7071b7d63103fe351d",
     "data": "0x...",
     "value": "0",
-    "estimated_gas": 270000,
-    "signature_offset": 1234
+    "estimated_gas": 226046,
+    "signature_offset": 548
   },
   "permit2": {
-    "domain": {},
-    "types": {},
+    "domain": {
+      "chainId": 42161,
+      "name": "Permit2",
+      "verifyingContract": "0x000000000022d473030f116ddee9f6b43ac78ba3"
+    },
+    "types": {
+      "PermitWitnessTransferFrom": [
+        { "name": "permitted", "type": "TokenPermissions" },
+        { "name": "spender", "type": "address" },
+        { "name": "nonce", "type": "uint256" },
+        { "name": "deadline", "type": "uint256" },
+        { "name": "witness", "type": "RialtoSwap" }
+      ]
+    },
     "primaryType": "PermitWitnessTransferFrom",
-    "message": {},
-    "nonce": "123",
-    "deadline": 1760000000
+    "message": {
+      "permitted": {
+        "token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+        "amount": "10000000000000000"
+      },
+      "spender": "0xbb6c13e7e1649736dc36cf7071b7d63103fe351d",
+      "witness": {
+        "recipient": "0xe968092b14829e5665a22531460ad34012610f1f",
+        "buyToken": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+        "minBuyAmount": "19701021",
+        "feeRecipient": "0xa86b9655644e2b76be863664eea7ac5db3f8fc89",
+        "srcBps": 5,
+        "dstBps": 0,
+        "referralCode": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "quoteId": "0xdc61621af402cf7b8975cc41a97ff21ad2d81f528c0e490cf0e252768b8cd7f4",
+        "actionsHash": "0x377090963ca2d0458a675da69e0f848da4d82adc4a066b5ad194a0572c2e50d9"
+      }
+    },
+    "nonce": "102222442441090043455808165797985926558",
+    "deadline": 1780300214
   }
 }
 ```
