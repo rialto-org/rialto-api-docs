@@ -35,8 +35,14 @@ The standard flow is:
 1. Call `GET /tokens` to discover supported tokens.
 2. Call `GET /quote` with sell token, buy token, amount, taker, and slippage.
 3. Call `POST /swap` with the full quote response.
-4. If the response includes a Permit2 payload, have the taker sign it.
-5. Submit the returned transaction from the taker wallet.
+4. If the response includes a Permit2 payload, have the taker sign the returned
+   EIP-712 `PermitWitnessTransferFrom` message.
+5. Insert the signature into `tx.data` at `tx.signature_offset`.
+6. Submit the returned transaction from the taker wallet.
+
+`/swap` returns the complete transaction payload for the RialtoRouter contract.
+Integrators do not need to build route calldata, pool calls, fees, Permit2
+witnesses, or settlement actions themselves.
 
 ## Public Endpoint: Tokens
 
@@ -108,12 +114,15 @@ Required query params:
 | `taker` | Non-zero wallet address that will receive output. |
 | `slippage_bps` | Max slippage in basis points. Example: `50` means 0.50%. |
 
+`slippageBps` is also accepted as an alias for `slippage_bps`.
+
 Optional query params:
 
 | Param | Description |
 | --- | --- |
 | `chain_id` | Chain id. Defaults to the server's configured chain. |
-| `max_hops` | Max route hops. Defaults to the server's configured max. |
+| `max_hops` | Accepted for compatibility; route policy is controlled server-side. |
+| `swap_fee_bps` | Integrator fee in basis points. Requires an integrator key — see [Integrator Fees](#integrator-fees). |
 
 Example:
 
@@ -228,11 +237,14 @@ Common request fields:
 | Field | Required | Description |
 | --- | --- | --- |
 | `quote` | Yes | Full response returned by `/quote`. |
-| `deadline_secs` | No | Transaction deadline window. Defaults to `300`. |
-| `settlement` | No | `permit2` or `allowance`. Defaults to `permit2`. |
+| `deadline_secs` | No | Transaction deadline window. Defaults to `300`; valid range is `30..=3600`. |
+| `settlement` | No | `permit2` or `allowance`. Can be omitted; the backend returns the effective settlement mode. |
 | `unwrap_buy_token_to_eth` | No | Only valid when quote ends in wrapped native token. |
-| `referral_code` | No | Optional partner referral code. |
 | `permit2_nonce` | No | Optional Permit2 nonce override. |
+
+Client-supplied fee or referral override fields are ignored. Fee and referral
+attribution are resolved server-side from the quote `taker` (or, for integrator
+swaps, from the integrator key — see [Integrator Fees](#integrator-fees)).
 
 Working example:
 
@@ -268,7 +280,7 @@ Important response fields:
 | `tx.data` | Transaction calldata. |
 | `tx.value` | Native token value to send, usually `0`. |
 | `tx.estimated_gas` | Estimated gas units. |
-| `tx.signature_offset` | Offset where Permit2 signature is inserted. |
+| `tx.signature_offset` | Offset where the 65-byte Permit2 signature is inserted. Present for Permit2 settlement. |
 | `permit2` | EIP-712 payload for taker signature, present for Permit2 settlement. |
 
 Example response shape:
@@ -348,6 +360,169 @@ Example response shape:
     "deadline": 1780300214
   }
 }
+```
+
+## Integrating the Swap Flow
+
+This section is for wallets, frontends, and other routers that want to integrate
+Rialto as an execution venue. The integration boundary is intentionally small:
+call `/quote`, post that quote to `/swap`, then submit the transaction `/swap`
+returns. You never build route calldata, pool calls, fee logic, slippage math, or
+Permit2 witnesses yourself — Rialto does all of it.
+
+### The two calls
+
+| Endpoint | What it returns | What you do with it |
+| --- | --- | --- |
+| `GET /quote` | Best route, expected output, fee breakdown, gas estimate. | Display pricing to the user; pass the whole response to `/swap`. |
+| `POST /swap` | A ready-to-send transaction for the RialtoRouter contract, plus (for Permit2) the EIP-712 message the user signs. | Sign if required, then submit from the taker wallet. |
+
+Send the **entire** `/quote` response as the `quote` field of the `/swap` body —
+do not modify or trim it.
+
+### What `/swap` returns
+
+The payload to send on-chain lives in the `tx` object:
+
+| Field | Description |
+| --- | --- |
+| `tx.to` | RialtoRouter contract address — the `to` of your transaction. |
+| `tx.data` | ABI-encoded calldata for the swap. |
+| `tx.value` | Native value to send (`0` for ERC20 sells; the sell amount for native ETH sells). |
+| `tx.estimated_gas` | Gas estimate you can seed wallet estimation with. |
+| `tx.signature_offset` | Byte offset in `tx.data` where the taker's 65-byte Permit2 signature is inserted. Present only for Permit2 settlement. |
+| `permit2` | EIP-712 typed-data message the taker signs. Present only for Permit2 settlement. |
+
+The `settlement` field tells you which of the two modes below applies. Choose your
+handling off `settlement`, not off assumptions — the backend decides the mode.
+
+### Permit2 settlement (default for ERC20 sells)
+
+Permit2 lets a user authorize a single, exact token transfer by **signing a
+message** instead of sending a separate approval transaction. Rialto uses Permit2
+with a **witness**: the signed EIP-712 message is bound to the precise swap —
+recipient, buy token, minimum output, deadline, quote id, and the hash of the
+route actions. That binding means the signature cannot be replayed for a
+different route, output, or recipient.
+
+A Permit2 response looks like:
+
+```json
+{
+  "settlement": "permit2",
+  "tx": {
+    "to": "0x<rialto-router>",
+    "data": "0x<calldata-with-signature-placeholder>",
+    "value": "0",
+    "estimated_gas": 226046,
+    "signature_offset": 548
+  },
+  "permit2": {
+    "domain": { "...": "..." },
+    "types": { "...": "..." },
+    "primaryType": "PermitWitnessTransferFrom",
+    "message": { "...": "..." },
+    "nonce": "102222442441090043455808165797985926558",
+    "deadline": 1780300214
+  }
+}
+```
+
+Steps:
+
+1. Have the taker wallet sign the `permit2` object as EIP-712 typed data.
+2. Splice the returned 65-byte signature into `tx.data` at `tx.signature_offset`.
+3. Send the transaction from the taker wallet (`to`, patched `data`, `value`).
+
+```ts
+function splicePermit2Signature(
+  txData: string,
+  signatureOffset: number,
+  signature: string
+): string {
+  const data = txData.startsWith("0x") ? txData.slice(2) : txData;
+  const sig = signature.startsWith("0x") ? signature.slice(2) : signature;
+  if (sig.length !== 130) {
+    throw new Error("Permit2 signature must be 65 bytes");
+  }
+  const start = signatureOffset * 2;
+  return `0x${data.slice(0, start)}${sig}${data.slice(start + sig.length)}`;
+}
+```
+
+### Allowance settlement
+
+`/swap` returns `settlement: "allowance"` (no `permit2` object, no
+`signature_offset`) when Permit2 is not the right path — for example native ETH
+sells, or a smart-contract-wallet taker that cannot produce an EOA Permit2
+signature.
+
+```json
+{
+  "settlement": "allowance",
+  "tx": {
+    "to": "0x<rialto-router>",
+    "data": "0x<calldata>",
+    "value": "0",
+    "estimated_gas": 226046
+  }
+}
+```
+
+- **ERC20 sells:** the taker approves `tx.to` for at least the raw
+  `quote.sell_amount`, then sends the transaction. Do not modify `tx.data`.
+- **Native ETH sells:** send the transaction with `tx.value`; no ERC20 approval
+  and no signature are needed.
+
+### Simulation
+
+Rialto already simulates every route. During quoting, each candidate route is
+executed against live chain state via `eth_call` on the router's simulation
+entrypoint, and a route is only returned if it actually executes and produces a
+valid output. So the transaction `/swap` hands you is **pre-validated** — its
+shape and output were checked on-chain, not merely encoded.
+
+You can also simulate the final transaction yourself before submitting, by
+running it as an `eth_call` from the taker address:
+
+- **Permit2 mode:** insert the signature first, then simulate the patched
+  `tx.data`.
+- **Allowance mode:** simulate `tx.data` unchanged, with the taker's ERC20
+  allowance in place (or `tx.value` for native ETH).
+
+A successful simulation confirms the route executes and the output meets
+`quote.min_buy_amount`. A revert means the quote is stale or the route no longer
+fills — re-quote and rebuild.
+
+### Submission
+
+Submit the transaction from the **taker wallet**. The Rialto API never signs or
+broadcasts transactions. Quotes reflect live liquidity and can go stale quickly,
+so re-quote before building if the user waits.
+
+### End-to-end example
+
+```bash
+API_KEY='<api_key>'
+
+# 1. Quote
+curl -sS 'https://rialto-trade-api.rialto.xyz/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50' \
+  -H "Authorization: Bearer $API_KEY" -o quote.json
+
+# 2. Build the swap from that quote
+jq -n --slurpfile quote quote.json '{ quote: $quote[0], deadline_secs: 300 }' > swap-request.json
+
+curl -sS -X POST 'https://rialto-trade-api.rialto.xyz/swap' \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  --data @swap-request.json -o swap.json
+
+# 3. In your app:
+#    - Permit2:    sign swap.permit2 (EIP-712) -> splice the signature into
+#                  swap.tx.data at swap.tx.signature_offset
+#    - Allowance:  approve swap.tx.to for quote.sell_amount (ERC20 sells)
+# 4. (Optional) eth_call swap.tx from the taker to simulate
+# 5. Submit swap.tx from the taker wallet
 ```
 
 ## Integrator Fees
