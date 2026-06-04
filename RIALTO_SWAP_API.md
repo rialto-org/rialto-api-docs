@@ -350,6 +350,155 @@ Example response shape:
 }
 ```
 
+## Integrator Fees
+
+Approved integrators (wallets, frontends, and other apps) can charge **their own
+fee on top of Rialto's** on every swap they route. Your fee is collected as part
+of the swap and paid **to your wallet in the same on-chain transaction** — there
+is no separate claim step, no fee contract to deploy, and no settlement to run
+yourself.
+
+### How it works at a glance
+
+1. You request a quote with a `swap_fee_bps` value — your fee, in basis points.
+2. Rialto adds your fee on top of its own and returns the full breakdown in the
+   quote.
+3. You post that quote to `/swap`. Rialto builds one transaction that, on
+   execution, pays both Rialto's treasury and **your wallet** atomically.
+4. The taker submits the transaction. Your fee lands in your wallet the moment
+   the swap settles.
+
+Your fee is **additive** — Rialto charges its standard fee, and your fee is taken
+on top of it. Rialto does not take any cut of your portion.
+
+### Getting set up
+
+Integrator access is configured by the Rialto team. [Contact us](#api-key-access)
+to be onboarded. We issue you an API key and bind three things to that key:
+
+| Bound to your key | Meaning |
+| --- | --- |
+| **Payout wallet** | The address your fees are sent to. |
+| **Maximum fee (bps)** | A per-key cap — the largest `swap_fee_bps` you may set. |
+| **Integrator id** | An identifier used to attribute the swaps you route. |
+
+Because these are bound to the **key** and not to the request, a leaked or
+tampered request can never redirect your fees to another wallet or push your fee
+above your agreed cap.
+
+> Keep your integrator key private, the same as any other API key. Anyone with
+> the key can route swaps under your integrator id (but still only ever pay your
+> configured wallet, up to your cap).
+
+### Setting your fee on `GET /quote`
+
+Add `swap_fee_bps` to the standard quote request. Everything else is identical to
+a normal quote.
+
+| Param | Description |
+| --- | --- |
+| `swap_fee_bps` | Your fee in basis points, applied on top of Rialto's fee. `30` = 0.30%. `swapFeeBps` is also accepted. |
+
+```bash
+INTEGRATOR_KEY='<your_api_key>'
+
+curl -sS 'https://rialto-trade-api.rialto.xyz/quote?sell_token=WETH&buy_token=USDC&sell_amount=0.01&taker=0xE968092b14829E5665a22531460Ad34012610F1f&slippage_bps=50&swap_fee_bps=30' \
+  -H "Authorization: Bearer $INTEGRATOR_KEY"
+```
+
+You only need to send `swap_fee_bps`. Your payout wallet and cap come from your
+key, so you do not pass them on the request.
+
+### Reading the fee in the quote response
+
+A quote that includes an integrator fee gains two things:
+
+1. An **`integrator_fee`** block — your fee, your payout wallet, and your
+   integrator id, echoed back so you can display or reconcile it.
+2. Extra entries in **`platform_fee.fees`** — one line per recipient. Each line
+   shows the **token the fee is taken in** and the **exact amount**, so you always
+   know precisely what your cut will be for that swap.
+
+```json
+{
+  "buy_amount": "19800022",
+  "platform_fee": {
+    "total_bps": 80,
+    "fees": [
+      {
+        "side": "source",
+        "token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+        "symbol": "WETH",
+        "decimals": 18,
+        "bps": "50",
+        "amount": "50000000000000",
+        "amount_decimal": "0.00005",
+        "recipient": "0xa86b9655644e2b76be863664eea7ac5db3f8fc89"
+      },
+      {
+        "side": "source",
+        "token": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+        "symbol": "WETH",
+        "decimals": 18,
+        "bps": "30",
+        "amount": "30000000000000",
+        "amount_decimal": "0.00003",
+        "recipient": "0x23ecad7a98ce5ec6ccaac8bc01ae8d3bd07dd7a6"
+      }
+    ]
+  },
+  "integrator_fee": {
+    "bps": 30,
+    "recipient": "0x23ecad7a98ce5ec6ccaac8bc01ae8d3bd07dd7a6",
+    "id": "your-integrator-id"
+  }
+}
+```
+
+In this example Rialto's fee is 50 bps and your fee is 30 bps, for a combined
+`total_bps` of 80. The `recipient` on the second line is **your** payout wallet.
+The `token` and `amount` fields tell you exactly which token the fee is taken in
+and how much — Rialto selects the most suitable token in the swap automatically,
+so you do not need to choose a fee token.
+
+### Building the swap
+
+Post the full quote to `/swap` using the **same integrator key**:
+
+```bash
+curl -sS -X POST 'https://rialto-trade-api.rialto.xyz/swap' \
+  -H "Authorization: Bearer $INTEGRATOR_KEY" \
+  -H "Content-Type: application/json" \
+  --data @swap-request.json
+```
+
+`/swap` re-checks your fee against your key — it reads the fee size from the
+quote, re-applies your cap, and takes your payout wallet from the key (never from
+the quote). It then returns a single transaction that pays Rialto and your wallet
+as part of the swap. From here the execution flow is exactly the same as a normal
+swap (Permit2 or allowance settlement) — see the [Swap](#protected-endpoint-swap)
+section. You do not build any fee logic yourself.
+
+> Use the **same key** for `/quote` and `/swap`. The integrator fee is only
+> honored when both calls are made with your integrator key.
+
+### Caps and rules
+
+| Rule | Behavior |
+| --- | --- |
+| Fee above your key's cap | `swap_fee_bps` greater than your configured maximum is rejected with `400`. |
+| Combined fee too high | Rialto's fee **plus** your fee must not exceed the protocol maximum (currently **100 bps** total). Over the limit is rejected with `400`. |
+| Non-integrator key | A key without integrator access that sends `swap_fee_bps` is rejected with `403`. |
+| No fee requested | Omit `swap_fee_bps` (or send `0`) and the swap behaves as a standard swap with no integrator fee. |
+
+### Summary
+
+- Onboard once; we bind your payout wallet, cap, and id to your key.
+- Add `swap_fee_bps` to `/quote` to set your fee per swap.
+- Read `integrator_fee` and `platform_fee` to know exactly what you'll earn.
+- Post the quote to `/swap` and submit the transaction — your fee is paid to your
+  wallet atomically, on every swap.
+
 ## Errors
 
 Errors are returned as JSON:
