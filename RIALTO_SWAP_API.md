@@ -566,7 +566,7 @@ Add `permit2_owner` to the standard quote request:
 API_KEY='rialto_live_example.redacted_secret'
 TAKER='<taker_wallet_address>'
 
-curl -sS "https://rialto-trade-api.rialto.xyz/quote?sell_token=USDG&buy_token=WEEK&sell_amount=1&taker=$TAKER&permit2_owner=$TAKER&slippage_bps=50&chain_id=0000" \
+curl -sS "https://rialto-trade-api.rialto.xyz/quote?sell_token=USDG&buy_token=WEEK&sell_amount=1&taker=$TAKER&permit2_owner=$TAKER&slippage_bps=50&chain_id=4663" \
   -H "Authorization: Bearer $API_KEY"
 ```
 
